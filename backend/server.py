@@ -157,7 +157,7 @@ async def get_filter_options():
         "cheque_sizes": [c for c in cheque_sizes if c]
     }
 
-@api_router.post("/investors", response_model=Investor)
+@api_router.post("/investors", response_model=Investor, status_code=201)
 async def create_investor(input: InvestorCreate):
     investor = Investor(**input.model_dump())
     doc = serialize_investor(investor)
