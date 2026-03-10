@@ -193,11 +193,32 @@ export const investorApi = {
 
   // Extract investors from content (client-side placeholder)
   // Note: For production, use Firebase Cloud Functions for API key security
-  extract: async (content) => {
-    // This is a placeholder - AI extraction requires a secure backend
-    // You can implement this via Firebase Cloud Functions
-    throw new Error('AI extraction requires Firebase Cloud Functions setup. Please add investors manually for now.');
-  },
+  extract: async (payload) => {
+  try {
+    const response = await fetch('http://127.0.0.1:8000/api/extract-investor', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(
+        typeof payload === 'string'
+          ? { content: payload, sourceUrl: '' }
+          : payload
+      ),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'AI extraction failed');
+    }
+
+    return data;
+  } catch (error) {
+    console.error('Error extracting investor:', error);
+    throw error;
+  }
+},
 
   // Export to Excel (client-side)
   exportExcel: async (filters = {}) => {
