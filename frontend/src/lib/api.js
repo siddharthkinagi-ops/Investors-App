@@ -1,3 +1,5 @@
+//api.js
+
 import { db } from './firebase';
 import {
   collection,
@@ -219,6 +221,35 @@ export const investorApi = {
     throw error;
   }
 },
+
+  // Discover investors automatically using backend AI search
+  discover: async (payload) => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/discover-investors', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sector: payload?.sector || '',
+          geography: payload?.geography || '',
+          stage: payload?.stage || '',
+          count: Number(payload?.count || 5),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Investor discovery failed');
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Error discovering investors:', error);
+      throw error;
+    }
+  },
 
   // Export to Excel (client-side)
   exportExcel: async (filters = {}) => {

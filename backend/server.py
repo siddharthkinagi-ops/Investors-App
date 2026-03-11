@@ -1,16 +1,18 @@
+# server.py
+
 from fastapi import FastAPI, HTTPException
 from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 import os
 import json
 import re
-from typing import Optional
 
 load_dotenv()
 
-app = FastAPI(title="Investor Database API")
+app = FastAPI(title="Investor Discovery API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,16 +25,17 @@ app.add_middleware(
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# Use a free-tier eligible Gemini model.
-# If this model is unavailable in your account, try:
-# "gemini-3-flash-preview"
-MODEL_NAME = "gemini-2.5-flash-lite"
+MODEL_NAME = "gemini-2.5-flash"
 
+grounding_tool = types.Tool(
+    google_search=types.GoogleSearch()
+)
 
-class ExtractRequest(BaseModel):
-    content: Optional[str] = None
-    sourceUrl: Optional[str] = ""
-
+class DiscoverRequest(BaseModel):
+    sector: str = ""
+    geography: str = ""
+    stage: str = ""
+    count: int = 5
 
 def clean_json_text(raw: str) -> str:
     raw = raw.strip()
@@ -41,104 +44,93 @@ def clean_json_text(raw: str) -> str:
     raw = re.sub(r"\s*```$", "", raw)
     return raw.strip()
 
-
-@app.get("/api/")
-async def root():
-    return {"message": "Investor Database API", "status": "healthy"}
-
-
 @app.get("/api/health")
 async def health():
     return {
         "status": "healthy",
-        "backend": "fastapi",
         "provider": "gemini",
         "gemini_configured": bool(api_key),
         "model": MODEL_NAME,
     }
 
-
-@app.post("/api/extract-investor")
-async def extract_investor(payload: ExtractRequest):
+@app.post("/api/discover-investors")
+async def discover_investors(payload: DiscoverRequest):
     if not client:
-        raise HTTPException(
-            status_code=500,
-            detail="GEMINI_API_KEY is missing in backend environment",
-        )
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY is missing")
 
-    content = (payload.content or "").strip()
-    source_url = (payload.sourceUrl or "").strip()
-
-    if not content:
-        raise HTTPException(status_code=400, detail="content is required")
+    sector = (payload.sector or "").strip()
+    geography = (payload.geography or "").strip()
+    stage = (payload.stage or "").strip()
+    count = max(1, min(payload.count or 5, 20))
 
     prompt = f"""
-Extract one investor/contact record from the content below.
+Find {count} real investors or investor-firm contacts currently active in {geography or "the target market"}.
 
-Return ONLY valid JSON in this exact shape:
-{{
-  "name": "",
-  "institution": "",
-  "title": "",
-  "cheque_size": "",
-  "geographies": [],
-  "sectors": [],
-  "stage": "",
-  "shareholding": "",
-  "email": "",
-  "website": "",
-  "source": "",
-  "notes": ""
-}}
+Focus:
+- sector: {sector or "general venture investing"}
+- stage: {stage or "early stage"}
 
-Rules:
-- Return JSON only
+Requirements:
+- Prefer named investors, partners, principals, managing directors, or clearly identified fund contacts
+- Use current web information
+- Prefer investors actually relevant to the given sector/geography/stage
+- Return ONLY valid JSON
 - No markdown
 - No explanation
-- Use empty strings if unknown
-- Use [] if unknown
-- "name" = person name
-- "institution" = investor firm/fund/company
-- "title" = designation
-- "source" = use sourceUrl if provided
-- "notes" = short summary of why this investor is relevant
-- If a field is not clearly present, leave it blank
 
-sourceUrl: {source_url}
-
-content:
-{content}
+Return this exact JSON shape:
+{{
+  "investors": [
+    {{
+      "name": "",
+      "institution": "",
+      "title": "",
+      "cheque_size": "",
+      "geographies": [],
+      "sectors": [],
+      "stage": "",
+      "shareholding": "",
+      "email": "",
+      "website": "",
+      "source": "",
+      "notes": ""
+    }}
+  ]
+}}
 """
 
     try:
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[grounding_tool]
+            ),
         )
 
         raw = response.text or ""
         cleaned = clean_json_text(raw)
-        data = json.loads(cleaned)
+        parsed = json.loads(cleaned)
+
+        investors = parsed.get("investors", [])
+
+        # Optional: collect grounded source URLs from Gemini metadata
+        source_urls = []
+        try:
+            chunks = response.candidates[0].grounding_metadata.grounding_chunks
+            for chunk in chunks:
+                uri = getattr(getattr(chunk, "web", None), "uri", None)
+                if uri and uri not in source_urls:
+                    source_urls.append(uri)
+        except Exception:
+            pass
 
         return {
-            "name": data.get("name", "") or "",
-            "institution": data.get("institution", "") or "",
-            "title": data.get("title", "") or "",
-            "cheque_size": data.get("cheque_size", "") or "",
-            "geographies": data.get("geographies", []) or [],
-            "sectors": data.get("sectors", []) or [],
-            "stage": data.get("stage", "") or "",
-            "shareholding": data.get("shareholding", "") or "",
-            "email": data.get("email", "") or "",
-            "website": data.get("website", "") or "",
-            "source": data.get("source", "") or source_url,
-            "notes": data.get("notes", "") or "",
+            "investors": investors,
+            "sources": source_urls
         }
 
     except json.JSONDecodeError:
-        raise HTTPException(
-            status_code=500,
-            detail="Model returned invalid JSON. Try shorter/cleaner article text.",
-        )
+        raise HTTPException(status_code=500, detail="Gemini returned invalid JSON")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
