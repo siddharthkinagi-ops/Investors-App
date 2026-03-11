@@ -125,6 +125,6 @@ zipp==3.23.0
 fastapi
 starlette
 pydantic
-openai
 python-dotenv
 uvicorn
+google-genai
