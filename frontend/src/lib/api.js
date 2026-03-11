@@ -1,5 +1,3 @@
-//api.js
-
 import { db } from './firebase';
 import {
   collection,
@@ -17,6 +15,7 @@ import {
 import * as XLSX from 'xlsx';
 
 const INVESTORS_COLLECTION = 'investors';
+const BACKEND_URL = 'http://192.168.0.109:8000';
 
 // Helper to convert Firestore timestamp to ISO string
 const convertTimestamp = (timestamp) => {
@@ -41,44 +40,43 @@ export const investorApi = {
   // Get all investors with optional filters
   getAll: async (filters = {}) => {
     try {
-      let q = collection(db, INVESTORS_COLLECTION);
-      const constraints = [];
-      
+      const q = collection(db, INVESTORS_COLLECTION);
+
       // We'll filter in memory for complex queries since Firestore has limitations
       const snapshot = await getDocs(query(q, orderBy('created_at', 'desc')));
       let investors = snapshot.docs.map(serializeInvestor);
-      
+
       // Apply filters in memory
       if (filters.search) {
         const searchLower = filters.search.toLowerCase();
-        investors = investors.filter(inv => 
+        investors = investors.filter(inv =>
           inv.name?.toLowerCase().includes(searchLower) ||
           inv.institution?.toLowerCase().includes(searchLower) ||
           inv.title?.toLowerCase().includes(searchLower) ||
           inv.email?.toLowerCase().includes(searchLower)
         );
       }
-      
+
       if (filters.geography) {
-        investors = investors.filter(inv => 
+        investors = investors.filter(inv =>
           inv.geographies?.includes(filters.geography)
         );
       }
-      
+
       if (filters.sector) {
-        investors = investors.filter(inv => 
+        investors = investors.filter(inv =>
           inv.sectors?.includes(filters.sector)
         );
       }
-      
+
       if (filters.stage) {
         investors = investors.filter(inv => inv.stage === filters.stage);
       }
-      
+
       if (filters.cheque_size) {
         investors = investors.filter(inv => inv.cheque_size === filters.cheque_size);
       }
-      
+
       return investors;
     } catch (error) {
       console.error('Error getting investors:', error);
@@ -91,13 +89,13 @@ export const investorApi = {
     try {
       const cutoff = new Date();
       cutoff.setHours(cutoff.getHours() - 24);
-      
+
       const q = query(
         collection(db, INVESTORS_COLLECTION),
         where('created_at', '>=', Timestamp.fromDate(cutoff)),
         orderBy('created_at', 'desc')
       );
-      
+
       const snapshot = await getDocs(q);
       return snapshot.docs.map(serializeInvestor);
     } catch (error) {
@@ -115,19 +113,19 @@ export const investorApi = {
     try {
       const snapshot = await getDocs(collection(db, INVESTORS_COLLECTION));
       const investors = snapshot.docs.map(doc => doc.data());
-      
+
       const geographies = new Set();
       const sectors = new Set();
       const stages = new Set();
       const cheque_sizes = new Set();
-      
+
       investors.forEach(inv => {
         inv.geographies?.forEach(g => g && geographies.add(g));
         inv.sectors?.forEach(s => s && sectors.add(s));
         if (inv.stage) stages.add(inv.stage);
         if (inv.cheque_size) cheque_sizes.add(inv.cheque_size);
       });
-      
+
       return {
         geographies: Array.from(geographies).sort(),
         sectors: Array.from(sectors).sort(),
@@ -150,9 +148,9 @@ export const investorApi = {
         created_at: Timestamp.now(),
         is_new: true,
       };
-      
+
       const docRef = await addDoc(collection(db, INVESTORS_COLLECTION), docData);
-      
+
       return {
         id: docRef.id,
         ...docData,
@@ -171,9 +169,9 @@ export const investorApi = {
       const updateData = { ...investor };
       delete updateData.id;
       delete updateData.created_at;
-      
+
       await updateDoc(docRef, updateData);
-      
+
       const updatedDoc = await getDoc(docRef);
       return serializeInvestor(updatedDoc);
     } catch (error) {
@@ -193,39 +191,38 @@ export const investorApi = {
     }
   },
 
-  // Extract investors from content (client-side placeholder)
-  // Note: For production, use Firebase Cloud Functions for API key security
+  // Extract investor from content using backend AI endpoint
   extract: async (payload) => {
-  try {
-    const response = await fetch('http://127.0.0.1:8000/api/extract-investor', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(
-        typeof payload === 'string'
-          ? { content: payload, sourceUrl: '' }
-          : payload
-      ),
-    });
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/extract-investor`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(
+          typeof payload === 'string'
+            ? { content: payload, sourceUrl: '' }
+            : payload
+        ),
+      });
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if (!response.ok) {
-      throw new Error(data.detail || 'AI extraction failed');
+      if (!response.ok) {
+        throw new Error(data.detail || 'AI extraction failed');
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Error extracting investor:', error);
+      throw error;
     }
-
-    return data;
-  } catch (error) {
-    console.error('Error extracting investor:', error);
-    throw error;
-  }
-},
+  },
 
   // Discover investors automatically using backend AI search
   discover: async (payload) => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/discover-investors', {
+      const response = await fetch(`${BACKEND_URL}/api/discover-investors`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -255,27 +252,27 @@ export const investorApi = {
   exportExcel: async (filters = {}) => {
     try {
       const investors = await investorApi.getAll(filters);
-      
+
       const data = investors.map(inv => ({
-        "Name": inv.name || "",
+        Name: inv.name || "",
         "Institution/Fund": inv.institution || "",
-        "Title": inv.title || "",
+        Title: inv.title || "",
         "Cheque Size": inv.cheque_size || "",
-        "Geographies": (inv.geographies || []).join(", "),
-        "Sectors": (inv.sectors || []).join(", "),
-        "Stage": inv.stage || "",
-        "Shareholding": inv.shareholding || "",
-        "Email": inv.email || "",
-        "Website": inv.website || "",
-        "Source": inv.source || "",
-        "Notes": inv.notes || "",
+        Geographies: (inv.geographies || []).join(", "),
+        Sectors: (inv.sectors || []).join(", "),
+        Stage: inv.stage || "",
+        Shareholding: inv.shareholding || "",
+        Email: inv.email || "",
+        Website: inv.website || "",
+        Source: inv.source || "",
+        Notes: inv.notes || "",
         "Added On": inv.created_at || "",
       }));
-      
+
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Investors");
-      
+
       XLSX.writeFile(wb, "investor_database.xlsx");
     } catch (error) {
       console.error('Error exporting to Excel:', error);
