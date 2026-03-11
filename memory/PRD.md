@@ -1,5 +1,24 @@
 # DealFlow Hunter - Investor Database PRD
 
+## ⚠️ IMPORTANT: Firebase Setup Required
+
+Your Firebase Firestore needs security rules configured. Go to **Firebase Console → Firestore Database → Rules** and set:
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /investors/{document=**} {
+      allow read, write: if true;  // Open access (as requested)
+    }
+  }
+}
+```
+
+Click **"Publish"** to apply the rules.
+
+---
+
 ## Original Problem Statement
 Build an app which scans the internet for angel investors, Venture Capitalists, and other stakeholders in the startup funding ecosystem to update data so as to help raise funds. Check sources including Inc42, YourStory, LinkedIn, X, various news sources, and Reddit.
 

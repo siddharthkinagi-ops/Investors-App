@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { investorApi } from '@/lib/api';
 
 const STAGES = ['Pre-Seed', 'Seed', 'Series A', 'Series B', 'Series C', 'Growth', 'Late Stage'];
+
 const CHEQUE_SIZES = [
   '$10K-$50K',
   '$50K-$100K',
@@ -38,26 +39,36 @@ const CHEQUE_SIZES = [
   '₹10Cr+',
 ];
 
-export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvestor }) => {
+const EMPTY_FORM = {
+  name: '',
+  institution: '',
+  title: '',
+  cheque_size: '',
+  geographies: [],
+  sectors: [],
+  stage: '',
+  shareholding: '',
+  email: '',
+  website: '',
+  source: '',
+  notes: '',
+};
+
+export const AddInvestorModal = ({
+  open,
+  onOpenChange,
+  onSuccess,
+  editingInvestor,
+  prefillInvestor,
+}) => {
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    institution: '',
-    title: '',
-    cheque_size: '',
-    geographies: [],
-    sectors: [],
-    stage: '',
-    shareholding: '',
-    email: '',
-    website: '',
-    source: '',
-    notes: '',
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
   const [geoInput, setGeoInput] = useState('');
   const [sectorInput, setSectorInput] = useState('');
 
   useEffect(() => {
+    if (!open) return;
+
     if (editingInvestor) {
       setFormData({
         name: editingInvestor.name || '',
@@ -73,65 +84,70 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
         source: editingInvestor.source || '',
         notes: editingInvestor.notes || '',
       });
-    } else {
+    } else if (prefillInvestor) {
       setFormData({
-        name: '',
-        institution: '',
-        title: '',
-        cheque_size: '',
-        geographies: [],
-        sectors: [],
-        stage: '',
-        shareholding: '',
-        email: '',
-        website: '',
-        source: '',
-        notes: '',
+        name: prefillInvestor.name || '',
+        institution: prefillInvestor.institution || '',
+        title: prefillInvestor.title || '',
+        cheque_size: prefillInvestor.cheque_size || '',
+        geographies: prefillInvestor.geographies || [],
+        sectors: prefillInvestor.sectors || [],
+        stage: prefillInvestor.stage || '',
+        shareholding: prefillInvestor.shareholding || '',
+        email: prefillInvestor.email || '',
+        website: prefillInvestor.website || '',
+        source: prefillInvestor.source || '',
+        notes: prefillInvestor.notes || '',
       });
+    } else {
+      setFormData(EMPTY_FORM);
     }
-  }, [editingInvestor, open]);
+
+    setGeoInput('');
+    setSectorInput('');
+  }, [editingInvestor, prefillInvestor, open]);
 
   const handleChange = (field, value) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const addGeography = () => {
     if (geoInput.trim() && !formData.geographies.includes(geoInput.trim())) {
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
-        geographies: [...prev.geographies, geoInput.trim()]
+        geographies: [...prev.geographies, geoInput.trim()],
       }));
       setGeoInput('');
     }
   };
 
   const removeGeography = (geo) => {
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      geographies: prev.geographies.filter(g => g !== geo)
+      geographies: prev.geographies.filter((g) => g !== geo),
     }));
   };
 
   const addSector = () => {
     if (sectorInput.trim() && !formData.sectors.includes(sectorInput.trim())) {
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
-        sectors: [...prev.sectors, sectorInput.trim()]
+        sectors: [...prev.sectors, sectorInput.trim()],
       }));
       setSectorInput('');
     }
   };
 
   const removeSector = (sector) => {
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      sectors: prev.sectors.filter(s => s !== sector)
+      sectors: prev.sectors.filter((s) => s !== sector),
     }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     if (!formData.name.trim()) {
       toast.error('Name is required');
       return;
@@ -146,6 +162,7 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
         await investorApi.create(formData);
         toast.success('Investor added successfully');
       }
+
       onSuccess();
       onOpenChange(false);
     } catch (error) {
@@ -161,12 +178,15 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="add-investor-modal">
         <DialogHeader>
           <DialogTitle className="text-xl font-bold" style={{ fontFamily: 'Manrope, sans-serif' }}>
-            {editingInvestor ? 'Edit Investor' : 'Add New Investor'}
+            {editingInvestor
+              ? 'Edit Investor'
+              : prefillInvestor
+              ? 'Review Extracted Investor'
+              : 'Add New Investor'}
           </DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6 mt-4">
-          {/* Basic Info */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="name">Name *</Label>
@@ -208,8 +228,10 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
                   <SelectValue placeholder="Select stage" />
                 </SelectTrigger>
                 <SelectContent>
-                  {STAGES.map(stage => (
-                    <SelectItem key={stage} value={stage}>{stage}</SelectItem>
+                  {STAGES.map((stage) => (
+                    <SelectItem key={stage} value={stage}>
+                      {stage}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -224,8 +246,10 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
                   <SelectValue placeholder="Select range" />
                 </SelectTrigger>
                 <SelectContent>
-                  {CHEQUE_SIZES.map(size => (
-                    <SelectItem key={size} value={size}>{size}</SelectItem>
+                  {CHEQUE_SIZES.map((size) => (
+                    <SelectItem key={size} value={size}>
+                      {size}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -242,7 +266,6 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
             </div>
           </div>
 
-          {/* Geographies */}
           <div className="space-y-2">
             <Label>Geographies of Investment</Label>
             <div className="flex gap-2">
@@ -250,13 +273,19 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
                 value={geoInput}
                 onChange={(e) => setGeoInput(e.target.value)}
                 placeholder="Add geography (e.g., India, USA)"
-                onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addGeography())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addGeography();
+                  }
+                }}
                 data-testid="input-geography"
               />
               <Button type="button" variant="outline" onClick={addGeography}>
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
+
             <div className="flex flex-wrap gap-2 mt-2">
               {formData.geographies.map((geo) => (
                 <Badge key={geo} variant="secondary" className="gap-1 pl-2">
@@ -273,7 +302,6 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
             </div>
           </div>
 
-          {/* Sectors */}
           <div className="space-y-2">
             <Label>Sectors / Industries</Label>
             <div className="flex gap-2">
@@ -281,13 +309,19 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
                 value={sectorInput}
                 onChange={(e) => setSectorInput(e.target.value)}
                 placeholder="Add sector (e.g., Fintech, SaaS)"
-                onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addSector())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addSector();
+                  }
+                }}
                 data-testid="input-sector"
               />
               <Button type="button" variant="outline" onClick={addSector}>
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
+
             <div className="flex flex-wrap gap-2 mt-2">
               {formData.sectors.map((sector) => (
                 <Badge key={sector} variant="secondary" className="gap-1 pl-2">
@@ -304,7 +338,6 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
             </div>
           </div>
 
-          {/* Contact */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email Address</Label>
@@ -329,7 +362,6 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
             </div>
           </div>
 
-          {/* Source & Notes */}
           <div className="space-y-2">
             <Label htmlFor="source">Source</Label>
             <Input
@@ -353,7 +385,6 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
             />
           </div>
 
-          {/* Actions */}
           <div className="flex justify-end gap-3 pt-4 border-t">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
@@ -364,7 +395,11 @@ export const AddInvestorModal = ({ open, onOpenChange, onSuccess, editingInvesto
               className="bg-orange-500 hover:bg-orange-600 text-white btn-lift"
               data-testid="submit-investor-btn"
             >
-              {loading ? 'Saving...' : editingInvestor ? 'Update Investor' : 'Add Investor'}
+              {loading
+                ? 'Saving...'
+                : editingInvestor
+                ? 'Update Investor'
+                : 'Add Investor'}
             </Button>
           </div>
         </form>

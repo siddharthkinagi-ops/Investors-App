@@ -49,6 +49,7 @@ export default function Dashboard({ initialTab = "all" }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAIModal, setShowAIModal] = useState(false);
   const [editingInvestor, setEditingInvestor] = useState(null);
+  const [prefillInvestor, setPrefillInvestor] = useState(null);
 
   const fetchInvestors = useCallback(async () => {
     setLoading(true);
@@ -134,6 +135,7 @@ export default function Dashboard({ initialTab = "all" }) {
   };
 
   const handleEdit = (investor) => {
+    setPrefillInvestor(null);
     setEditingInvestor(investor);
     setShowAddModal(true);
   };
@@ -217,17 +219,18 @@ export default function Dashboard({ initialTab = "all" }) {
                 <Sparkles className="h-4 w-4 mr-2" />
                 AI Extract
               </Button>
-              <Button
-                onClick={() => {
-                  setEditingInvestor(null);
-                  setShowAddModal(true);
-                }}
-                className="bg-orange-500 hover:bg-orange-600 text-white btn-lift"
-                data-testid="add-investor-btn"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Investor
-              </Button>
+<Button
+  onClick={() => {
+    setEditingInvestor(null);
+    setPrefillInvestor(null);
+    setShowAddModal(true);
+  }}
+  className="bg-orange-500 hover:bg-orange-600 text-white btn-lift"
+  data-testid="add-investor-btn"
+>
+  <Plus className="h-4 w-4 mr-2" />
+  Add Investor
+</Button>
             </div>
           </div>
         </header>
@@ -281,15 +284,38 @@ export default function Dashboard({ initialTab = "all" }) {
       <AddInvestorModal
         open={showAddModal}
         onOpenChange={setShowAddModal}
-        onSuccess={handleInvestorCreated}
+        onSuccess={() => {
+          setPrefillInvestor(null);
+          handleInvestorCreated();
+        }}
         editingInvestor={editingInvestor}
+        prefillInvestor={prefillInvestor}
       />
 
-      <AIExtractModal
-        open={showAIModal}
-        onOpenChange={setShowAIModal}
-        onSuccess={handleInvestorCreated}
-      />
+<AIExtractModal
+  open={showAIModal}
+  onOpenChange={setShowAIModal}
+  onSuccess={(result) => {
+    setPrefillInvestor({
+      name: result.name || '',
+      institution: result.institution || '',
+      title: result.title || '',
+      cheque_size: result.cheque_size || '',
+      geographies: result.geographies || [],
+      sectors: result.sectors || [],
+      stage: result.stage || '',
+      shareholding: result.shareholding || '',
+      email: result.email || '',
+      website: result.website || '',
+      source: result.source || '',
+      notes: result.notes || '',
+    });
+
+    setEditingInvestor(null);
+    setShowAIModal(false);
+    setShowAddModal(true);
+  }}
+/>
     </div>
   );
 }

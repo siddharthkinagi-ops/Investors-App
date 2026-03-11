@@ -1,373 +1,146 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from dotenv import load_dotenv
+# from fastapi import FastAPI
+# from starlette.middleware.cors import CORSMiddleware
+# import os
+
+# # Minimal backend - Firebase handles all data operations
+# app = FastAPI(title="Investor Database API - Firebase Backend")
+
+# @app.get("/api/")
+# async def root():
+#     return {"message": "Investor Database API - Using Firebase", "status": "healthy"}
+
+# @app.get("/api/health")
+# async def health():
+#     return {"status": "healthy", "backend": "firebase"}
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_credentials=True,
+#     allow_origins=["*"],
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+from fastapi import FastAPI, HTTPException
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from openai import OpenAI
 import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
-import uuid
-from datetime import datetime, timezone, timedelta
-import io
-import pandas as pd
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+import json
+from typing import Optional
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv()
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-# Create the main app
-app = FastAPI()
-
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
-
-# Define Models
-class Investor(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    institution: Optional[str] = None
-    title: Optional[str] = None
-    cheque_size: Optional[str] = None
-    geographies: Optional[List[str]] = []
-    sectors: Optional[List[str]] = []
-    stage: Optional[str] = None
-    shareholding: Optional[str] = None
-    email: Optional[str] = None
-    website: Optional[str] = None
-    source: Optional[str] = None
-    notes: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    is_new: bool = True
-
-class InvestorCreate(BaseModel):
-    name: str
-    institution: Optional[str] = None
-    title: Optional[str] = None
-    cheque_size: Optional[str] = None
-    geographies: Optional[List[str]] = []
-    sectors: Optional[List[str]] = []
-    stage: Optional[str] = None
-    shareholding: Optional[str] = None
-    email: Optional[str] = None
-    website: Optional[str] = None
-    source: Optional[str] = None
-    notes: Optional[str] = None
-
-class InvestorUpdate(BaseModel):
-    name: Optional[str] = None
-    institution: Optional[str] = None
-    title: Optional[str] = None
-    cheque_size: Optional[str] = None
-    geographies: Optional[List[str]] = None
-    sectors: Optional[List[str]] = None
-    stage: Optional[str] = None
-    shareholding: Optional[str] = None
-    email: Optional[str] = None
-    website: Optional[str] = None
-    source: Optional[str] = None
-    notes: Optional[str] = None
-
-class ExtractRequest(BaseModel):
-    content: str
-
-class ExtractResponse(BaseModel):
-    investors: List[Investor]
-    message: str
-
-# Helper to serialize investor for MongoDB
-def serialize_investor(investor: Investor) -> dict:
-    doc = investor.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    return doc
-
-def deserialize_investor(doc: dict) -> dict:
-    if isinstance(doc.get('created_at'), str):
-        doc['created_at'] = datetime.fromisoformat(doc['created_at'])
-    return doc
-
-# Routes
-@api_router.get("/")
-async def root():
-    return {"message": "Investor Database API"}
-
-@api_router.get("/investors", response_model=List[Investor])
-async def get_investors(
-    search: Optional[str] = Query(None),
-    geography: Optional[str] = Query(None),
-    sector: Optional[str] = Query(None),
-    stage: Optional[str] = Query(None),
-    cheque_size: Optional[str] = Query(None)
-):
-    query = {}
-    
-    if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"institution": {"$regex": search, "$options": "i"}},
-            {"title": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}}
-        ]
-    
-    if geography:
-        query["geographies"] = {"$in": [geography]}
-    
-    if sector:
-        query["sectors"] = {"$in": [sector]}
-    
-    if stage:
-        query["stage"] = stage
-    
-    if cheque_size:
-        query["cheque_size"] = cheque_size
-    
-    investors = await db.investors.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return [deserialize_investor(inv) for inv in investors]
-
-@api_router.get("/investors/new", response_model=List[Investor])
-async def get_new_investors():
-    """Get investors added in the last 24 hours"""
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    investors = await db.investors.find(
-        {"created_at": {"$gte": cutoff}},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(1000)
-    return [deserialize_investor(inv) for inv in investors]
-
-@api_router.get("/investors/filters")
-async def get_filter_options():
-    """Get unique values for filter dropdowns"""
-    geographies = await db.investors.distinct("geographies")
-    sectors = await db.investors.distinct("sectors")
-    stages = await db.investors.distinct("stage")
-    cheque_sizes = await db.investors.distinct("cheque_size")
-    
-    return {
-        "geographies": [g for g in geographies if g],
-        "sectors": [s for s in sectors if s],
-        "stages": [s for s in stages if s],
-        "cheque_sizes": [c for c in cheque_sizes if c]
-    }
-
-@api_router.post("/investors", response_model=Investor, status_code=201)
-async def create_investor(input: InvestorCreate):
-    investor = Investor(**input.model_dump())
-    doc = serialize_investor(investor)
-    await db.investors.insert_one(doc)
-    return investor
-
-@api_router.put("/investors/{investor_id}", response_model=Investor)
-async def update_investor(investor_id: str, input: InvestorUpdate):
-    existing = await db.investors.find_one({"id": investor_id}, {"_id": 0})
-    if not existing:
-        raise HTTPException(status_code=404, detail="Investor not found")
-    
-    update_data = {k: v for k, v in input.model_dump().items() if v is not None}
-    if update_data:
-        await db.investors.update_one(
-            {"id": investor_id},
-            {"$set": update_data}
-        )
-    
-    updated = await db.investors.find_one({"id": investor_id}, {"_id": 0})
-    return deserialize_investor(updated)
-
-@api_router.delete("/investors/{investor_id}")
-async def delete_investor(investor_id: str):
-    result = await db.investors.delete_one({"id": investor_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Investor not found")
-    return {"message": "Investor deleted successfully"}
-
-@api_router.post("/extract-investors", response_model=ExtractResponse)
-async def extract_investors(request: ExtractRequest):
-    """Extract investor information from pasted content using AI"""
-    try:
-        api_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not api_key:
-            raise HTTPException(status_code=500, detail="LLM API key not configured")
-        
-        chat = LlmChat(
-            api_key=api_key,
-            session_id=str(uuid.uuid4()),
-            system_message="""You are an expert at extracting investor information from articles and news content.
-            
-Extract investor details from the provided content and return them in a structured JSON format.
-For each investor found, extract:
-- name: Full name of the investor
-- institution: Name of the fund, company, or institution
-- title: Their role/title (e.g., "Partner", "Managing Director", "Angel Investor")
-- cheque_size: Average investment amount (e.g., "$500K-$2M", "₹1-5 Cr")
-- geographies: List of regions they invest in (e.g., ["India", "Southeast Asia"])
-- sectors: List of sectors they focus on (e.g., ["Fintech", "SaaS", "HealthTech"])
-- stage: Investment stage (e.g., "Seed", "Series A", "Growth")
-- shareholding: Typical equity percentage (e.g., "10-20%")
-- email: Email address if mentioned
-- website: Website URL if mentioned
-- source: Source of the information
-
-Return ONLY a valid JSON array of investor objects. If no investors are found, return an empty array [].
-Example response format:
-[
-  {
-    "name": "John Doe",
-    "institution": "ABC Ventures",
-    "title": "Partner",
-    "cheque_size": "$1-5M",
-    "geographies": ["USA", "India"],
-    "sectors": ["Fintech", "SaaS"],
-    "stage": "Series A",
-    "shareholding": "15-25%",
-    "email": "john@abcventures.com",
-    "website": "https://abcventures.com",
-    "source": "Article from Inc42"
-  }
-]"""
-        ).with_model("openai", "gpt-5.2")
-        
-        user_message = UserMessage(
-            text=f"Extract all investor information from the following content:\n\n{request.content}"
-        )
-        
-        response = await chat.send_message(user_message)
-        
-        # Parse the JSON response
-        import json
-        try:
-            # Clean up the response - remove markdown code blocks if present
-            cleaned_response = response.strip()
-            if cleaned_response.startswith("```json"):
-                cleaned_response = cleaned_response[7:]
-            if cleaned_response.startswith("```"):
-                cleaned_response = cleaned_response[3:]
-            if cleaned_response.endswith("```"):
-                cleaned_response = cleaned_response[:-3]
-            cleaned_response = cleaned_response.strip()
-            
-            investors_data = json.loads(cleaned_response)
-            
-            if not isinstance(investors_data, list):
-                investors_data = [investors_data]
-            
-            created_investors = []
-            for inv_data in investors_data:
-                if inv_data.get('name'):
-                    investor = Investor(
-                        name=inv_data.get('name', ''),
-                        institution=inv_data.get('institution'),
-                        title=inv_data.get('title'),
-                        cheque_size=inv_data.get('cheque_size'),
-                        geographies=inv_data.get('geographies', []),
-                        sectors=inv_data.get('sectors', []),
-                        stage=inv_data.get('stage'),
-                        shareholding=inv_data.get('shareholding'),
-                        email=inv_data.get('email'),
-                        website=inv_data.get('website'),
-                        source=inv_data.get('source'),
-                        is_new=True
-                    )
-                    doc = serialize_investor(investor)
-                    await db.investors.insert_one(doc)
-                    created_investors.append(investor)
-            
-            return ExtractResponse(
-                investors=created_investors,
-                message=f"Successfully extracted {len(created_investors)} investor(s)"
-            )
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse AI response: {response}")
-            raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {str(e)}")
-            
-    except Exception as e:
-        logger.error(f"AI extraction failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"AI extraction failed: {str(e)}")
-
-@api_router.get("/investors/export")
-async def export_investors(
-    search: Optional[str] = Query(None),
-    geography: Optional[str] = Query(None),
-    sector: Optional[str] = Query(None),
-    stage: Optional[str] = Query(None)
-):
-    """Export investors to Excel"""
-    query = {}
-    
-    if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"institution": {"$regex": search, "$options": "i"}},
-            {"title": {"$regex": search, "$options": "i"}}
-        ]
-    
-    if geography:
-        query["geographies"] = {"$in": [geography]}
-    
-    if sector:
-        query["sectors"] = {"$in": [sector]}
-    
-    if stage:
-        query["stage"] = stage
-    
-    investors = await db.investors.find(query, {"_id": 0}).to_list(10000)
-    
-    # Prepare data for Excel
-    data = []
-    for inv in investors:
-        data.append({
-            "Name": inv.get("name", ""),
-            "Institution/Fund": inv.get("institution", ""),
-            "Title": inv.get("title", ""),
-            "Cheque Size": inv.get("cheque_size", ""),
-            "Geographies": ", ".join(inv.get("geographies", [])),
-            "Sectors": ", ".join(inv.get("sectors", [])),
-            "Stage": inv.get("stage", ""),
-            "Shareholding": inv.get("shareholding", ""),
-            "Email": inv.get("email", ""),
-            "Website": inv.get("website", ""),
-            "Source": inv.get("source", ""),
-            "Notes": inv.get("notes", ""),
-            "Added On": inv.get("created_at", "")
-        })
-    
-    df = pd.DataFrame(data)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Investors')
-    output.seek(0)
-    
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=investor_database.xlsx"}
-    )
-
-# Include the router in the main app
-app.include_router(api_router)
+app = FastAPI(title="Investor Database API")
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key) if api_key else None
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+
+class ExtractRequest(BaseModel):
+    content: Optional[str] = None
+    sourceUrl: Optional[str] = ""
+
+
+@app.get("/api/")
+async def root():
+    return {"message": "Investor Database API", "status": "healthy"}
+
+
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "healthy",
+        "backend": "fastapi",
+        "openai_configured": bool(api_key),
+    }
+
+
+@app.post("/api/extract-investor")
+async def extract_investor(payload: ExtractRequest):
+    if not client:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is missing in backend environment",
+        )
+
+    content = (payload.content or "").strip()
+    source_url = (payload.sourceUrl or "").strip()
+
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    prompt = f"""
+Extract one investor/contact record from the content below.
+
+Return ONLY valid JSON in this exact shape:
+{{
+  "name": "",
+  "institution": "",
+  "title": "",
+  "cheque_size": "",
+  "geographies": [],
+  "sectors": [],
+  "stage": "",
+  "shareholding": "",
+  "email": "",
+  "website": "",
+  "source": "",
+  "notes": ""
+}}
+
+Rules:
+- Return JSON only
+- No markdown
+- No explanation
+- Use empty strings if unknown
+- Use [] if unknown
+- "name" = person name
+- "institution" = investor firm/fund/company
+- "title" = designation
+- "source" = use sourceUrl if provided
+- "notes" = short summary of why this investor is relevant
+
+sourceUrl: {source_url}
+
+content:
+{content}
+"""
+
+    try:
+        response = client.responses.create(
+            model="gpt-5.4",
+            input=prompt
+        )
+
+        raw = response.output_text.strip()
+        data = json.loads(raw)
+
+        return {
+            "name": data.get("name", ""),
+            "institution": data.get("institution", ""),
+            "title": data.get("title", ""),
+            "cheque_size": data.get("cheque_size", ""),
+            "geographies": data.get("geographies", []) or [],
+            "sectors": data.get("sectors", []) or [],
+            "stage": data.get("stage", ""),
+            "shareholding": data.get("shareholding", ""),
+            "email": data.get("email", ""),
+            "website": data.get("website", ""),
+            "source": data.get("source", "") or source_url,
+            "notes": data.get("notes", ""),
+        }
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Model returned invalid JSON")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
