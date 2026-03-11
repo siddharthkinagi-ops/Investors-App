@@ -1,33 +1,11 @@
-# from fastapi import FastAPI
-# from starlette.middleware.cors import CORSMiddleware
-# import os
-
-# # Minimal backend - Firebase handles all data operations
-# app = FastAPI(title="Investor Database API - Firebase Backend")
-
-# @app.get("/api/")
-# async def root():
-#     return {"message": "Investor Database API - Using Firebase", "status": "healthy"}
-
-# @app.get("/api/health")
-# async def health():
-#     return {"status": "healthy", "backend": "firebase"}
-
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_credentials=True,
-#     allow_origins=["*"],
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
 from fastapi import FastAPI, HTTPException
 from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from openai import OpenAI
+from google import genai
 import os
 import json
+import re
 from typing import Optional
 
 load_dotenv()
@@ -42,13 +20,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key) if api_key else None
+api_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key) if api_key else None
+
+# Use a free-tier eligible Gemini model.
+# If this model is unavailable in your account, try:
+# "gemini-3-flash-preview"
+MODEL_NAME = "gemini-2.5-flash-lite"
 
 
 class ExtractRequest(BaseModel):
     content: Optional[str] = None
     sourceUrl: Optional[str] = ""
+
+
+def clean_json_text(raw: str) -> str:
+    raw = raw.strip()
+    raw = re.sub(r"^```json\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"^```\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
 
 
 @app.get("/api/")
@@ -61,7 +52,9 @@ async def health():
     return {
         "status": "healthy",
         "backend": "fastapi",
-        "openai_configured": bool(api_key),
+        "provider": "gemini",
+        "gemini_configured": bool(api_key),
+        "model": MODEL_NAME,
     }
 
 
@@ -70,7 +63,7 @@ async def extract_investor(payload: ExtractRequest):
     if not client:
         raise HTTPException(
             status_code=500,
-            detail="OPENAI_API_KEY is missing in backend environment",
+            detail="GEMINI_API_KEY is missing in backend environment",
         )
 
     content = (payload.content or "").strip()
@@ -109,6 +102,7 @@ Rules:
 - "title" = designation
 - "source" = use sourceUrl if provided
 - "notes" = short summary of why this investor is relevant
+- If a field is not clearly present, leave it blank
 
 sourceUrl: {source_url}
 
@@ -117,30 +111,34 @@ content:
 """
 
     try:
-        response = client.responses.create(
-            model="gpt-5.4",
-            input=prompt
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
         )
 
-        raw = response.output_text.strip()
-        data = json.loads(raw)
+        raw = response.text or ""
+        cleaned = clean_json_text(raw)
+        data = json.loads(cleaned)
 
         return {
-            "name": data.get("name", ""),
-            "institution": data.get("institution", ""),
-            "title": data.get("title", ""),
-            "cheque_size": data.get("cheque_size", ""),
+            "name": data.get("name", "") or "",
+            "institution": data.get("institution", "") or "",
+            "title": data.get("title", "") or "",
+            "cheque_size": data.get("cheque_size", "") or "",
             "geographies": data.get("geographies", []) or [],
             "sectors": data.get("sectors", []) or [],
-            "stage": data.get("stage", ""),
-            "shareholding": data.get("shareholding", ""),
-            "email": data.get("email", ""),
-            "website": data.get("website", ""),
+            "stage": data.get("stage", "") or "",
+            "shareholding": data.get("shareholding", "") or "",
+            "email": data.get("email", "") or "",
+            "website": data.get("website", "") or "",
             "source": data.get("source", "") or source_url,
-            "notes": data.get("notes", ""),
+            "notes": data.get("notes", "") or "",
         }
 
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Model returned invalid JSON")
+        raise HTTPException(
+            status_code=500,
+            detail="Model returned invalid JSON. Try shorter/cleaner article text.",
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
