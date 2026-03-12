@@ -1,3 +1,5 @@
+//api.js
+
 import { db } from './firebase';
 import {
   collection,
@@ -11,6 +13,7 @@ import {
   where,
   orderBy,
   Timestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 
@@ -26,13 +29,136 @@ const convertTimestamp = (timestamp) => {
 };
 
 // Helper to serialize investor data from Firestore
-const serializeInvestor = (doc) => {
-  const data = doc.data();
+const serializeInvestor = (docSnap) => {
+  const data = docSnap.data();
   return {
-    id: doc.id,
+    id: docSnap.id,
     ...data,
     created_at: convertTimestamp(data.created_at),
   };
+};
+
+const normalizeHeader = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s/\\\-().]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const normalizeRowKeys = (row) => {
+  const normalized = {};
+
+  Object.entries(row || {}).forEach(([key, value]) => {
+    normalized[normalizeHeader(key)] = value;
+  });
+
+  return normalized;
+};
+
+const getRowValue = (row, possibleKeys = []) => {
+  for (const key of possibleKeys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+  return '';
+};
+
+const parseListValue = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+  }
+
+  if (value === undefined || value === null || value === '') {
+    return [];
+  }
+
+  return String(value)
+    .split(/[,;|\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const parseDateToTimestamp = (value) => {
+  if (!value) return Timestamp.now();
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return Timestamp.fromDate(value);
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return Timestamp.fromDate(parsed);
+  }
+
+  return Timestamp.now();
+};
+
+const buildInvestorFromImportedRow = (rawRow) => {
+  const row = normalizeRowKeys(rawRow);
+
+  return {
+    name: String(getRowValue(row, ['name', 'investor_name'])).trim(),
+    institution: String(
+      getRowValue(row, [
+        'institution_fund',
+        'institution',
+        'fund',
+        'firm',
+        'investor_firm',
+        'company',
+      ])
+    ).trim(),
+    title: String(getRowValue(row, ['title', 'designation', 'role'])).trim(),
+    cheque_size: String(
+      getRowValue(row, [
+        'cheque_size',
+        'check_size',
+        'ticket_size',
+        'cheque',
+        'fund_size',
+      ])
+    ).trim(),
+    geographies: parseListValue(
+      getRowValue(row, ['geographies', 'geography', 'regions', 'region'])
+    ),
+    sectors: parseListValue(
+      getRowValue(row, ['sectors', 'sector', 'focus_sectors', 'focus_sector'])
+    ),
+    stage: String(getRowValue(row, ['stage', 'stages'])).trim(),
+    shareholding: String(getRowValue(row, ['shareholding'])).trim(),
+    email: String(getRowValue(row, ['email', 'email_address', 'e_mail'])).trim(),
+    website: String(getRowValue(row, ['website', 'url', 'site', 'linkedin'])).trim(),
+    source: String(getRowValue(row, ['source', 'source_url', 'reference'])).trim(),
+    notes: String(
+      getRowValue(row, ['notes', 'remarks', 'comments', 'comment', 'description'])
+    ).trim(),
+    created_at: parseDateToTimestamp(
+      getRowValue(row, ['added_on', 'created_at', 'date_added', 'added_date'])
+    ),
+    is_new: true,
+  };
+};
+
+const hasMeaningfulInvestorData = (investor) => {
+  return Boolean(
+    investor.name ||
+      investor.institution ||
+      investor.title ||
+      investor.email ||
+      investor.website ||
+      investor.source ||
+      investor.notes ||
+      investor.geographies.length ||
+      investor.sectors.length ||
+      investor.stage ||
+      investor.cheque_size
+  );
 };
 
 // Investor API functions using Firebase
@@ -187,6 +313,74 @@ export const investorApi = {
       return { message: 'Investor deleted successfully' };
     } catch (error) {
       console.error('Error deleting investor:', error);
+      throw error;
+    }
+  },
+
+  // Import investors from CSV/Excel file and store in Firebase
+  importExcel: async (file) => {
+    try {
+      if (!file) {
+        throw new Error('Please select a file to import');
+      }
+
+      const fileName = file.name?.toLowerCase() || '';
+      const isValidFile =
+        fileName.endsWith('.xlsx') ||
+        fileName.endsWith('.xls') ||
+        fileName.endsWith('.csv');
+
+      if (!isValidFile) {
+        throw new Error('Only .xlsx, .xls, and .csv files are supported');
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, {
+        type: 'array',
+        cellDates: true,
+      });
+
+      const firstSheetName = workbook.SheetNames[0];
+      if (!firstSheetName) {
+        throw new Error('No sheet found in the uploaded file');
+      }
+
+      const worksheet = workbook.Sheets[firstSheetName];
+      const rows = XLSX.utils.sheet_to_json(worksheet, {
+        defval: '',
+        raw: false,
+      });
+
+      if (!rows.length) {
+        throw new Error('The uploaded file is empty');
+      }
+
+      const investorsToImport = rows
+        .map(buildInvestorFromImportedRow)
+        .filter(hasMeaningfulInvestorData);
+
+      if (!investorsToImport.length) {
+        throw new Error('No valid investor records found in the file');
+      }
+
+      const batchSize = 400;
+      for (let i = 0; i < investorsToImport.length; i += batchSize) {
+        const batch = writeBatch(db);
+        const chunk = investorsToImport.slice(i, i + batchSize);
+
+        chunk.forEach((investor) => {
+          const newDocRef = doc(collection(db, INVESTORS_COLLECTION));
+          batch.set(newDocRef, investor);
+        });
+
+        await batch.commit();
+      }
+
+      return {
+        imported: investorsToImport.length,
+      };
+    } catch (error) {
+      console.error('Error importing Excel/CSV:', error);
       throw error;
     }
   },

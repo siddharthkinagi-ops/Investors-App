@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+//Dashboard.jsx
+
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Search, 
   Plus, 
   Sparkles, 
   Download, 
+  Upload,
   Database, 
   Users, 
   Clock, 
@@ -32,6 +35,7 @@ export default function Dashboard({ initialTab = "all" }) {
   const [investors, setInvestors] = useState([]);
   const [newInvestors, setNewInvestors] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
   const [filters, setFilters] = useState({
     search: '',
     geography: '',
@@ -50,6 +54,7 @@ export default function Dashboard({ initialTab = "all" }) {
   const [showAIModal, setShowAIModal] = useState(false);
   const [editingInvestor, setEditingInvestor] = useState(null);
   const [prefillInvestor, setPrefillInvestor] = useState(null);
+  const fileInputRef = useRef(null);
 
   const fetchInvestors = useCallback(async () => {
     setLoading(true);
@@ -113,6 +118,36 @@ export default function Dashboard({ initialTab = "all" }) {
     } catch (error) {
       console.error('Export failed:', error);
       toast.error('Failed to export data');
+    }
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFileChange = async (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    try {
+      setImporting(true);
+
+      const result = await investorApi.importExcel(file);
+
+      toast.success(
+        `${result.imported} investor record${result.imported !== 1 ? 's' : ''} imported successfully`
+      );
+
+      fetchInvestors();
+      fetchNewInvestors();
+      fetchFilterOptions();
+    } catch (error) {
+      console.error('Import failed:', error);
+      toast.error(error.message || 'Failed to import file');
+    } finally {
+      setImporting(false);
+      event.target.value = '';
     }
   };
 
@@ -201,6 +236,14 @@ export default function Dashboard({ initialTab = "all" }) {
             </div>
 
             <div className="flex items-center gap-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={handleImportFileChange}
+              />
+
               <Button
                 variant="outline"
                 onClick={handleExport}
@@ -210,6 +253,18 @@ export default function Dashboard({ initialTab = "all" }) {
                 <Download className="h-4 w-4 mr-2" />
                 Export
               </Button>
+
+              <Button
+                variant="outline"
+                onClick={handleImportClick}
+                disabled={importing}
+                className="border-slate-200 hover:bg-slate-50"
+                data-testid="import-btn"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                {importing ? 'Importing...' : 'Import'}
+              </Button>
+
               <Button
                 variant="outline"
                 onClick={() => setShowAIModal(true)}
@@ -219,18 +274,19 @@ export default function Dashboard({ initialTab = "all" }) {
                 <Sparkles className="h-4 w-4 mr-2" />
                 AI Extract
               </Button>
-<Button
-  onClick={() => {
-    setEditingInvestor(null);
-    setPrefillInvestor(null);
-    setShowAddModal(true);
-  }}
-  className="bg-orange-500 hover:bg-orange-600 text-white btn-lift"
-  data-testid="add-investor-btn"
->
-  <Plus className="h-4 w-4 mr-2" />
-  Add Investor
-</Button>
+
+              <Button
+                onClick={() => {
+                  setEditingInvestor(null);
+                  setPrefillInvestor(null);
+                  setShowAddModal(true);
+                }}
+                className="bg-orange-500 hover:bg-orange-600 text-white btn-lift"
+                data-testid="add-investor-btn"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Investor
+              </Button>
             </div>
           </div>
         </header>
@@ -292,30 +348,30 @@ export default function Dashboard({ initialTab = "all" }) {
         prefillInvestor={prefillInvestor}
       />
 
-<AIExtractModal
-  open={showAIModal}
-  onOpenChange={setShowAIModal}
-  onSuccess={(result) => {
-    setPrefillInvestor({
-      name: result.name || '',
-      institution: result.institution || '',
-      title: result.title || '',
-      cheque_size: result.cheque_size || '',
-      geographies: result.geographies || [],
-      sectors: result.sectors || [],
-      stage: result.stage || '',
-      shareholding: result.shareholding || '',
-      email: result.email || '',
-      website: result.website || '',
-      source: result.source || '',
-      notes: result.notes || '',
-    });
+      <AIExtractModal
+        open={showAIModal}
+        onOpenChange={setShowAIModal}
+        onSuccess={(result) => {
+          setPrefillInvestor({
+            name: result.name || '',
+            institution: result.institution || '',
+            title: result.title || '',
+            cheque_size: result.cheque_size || '',
+            geographies: result.geographies || [],
+            sectors: result.sectors || [],
+            stage: result.stage || '',
+            shareholding: result.shareholding || '',
+            email: result.email || '',
+            website: result.website || '',
+            source: result.source || '',
+            notes: result.notes || '',
+          });
 
-    setEditingInvestor(null);
-    setShowAIModal(false);
-    setShowAddModal(true);
-  }}
-/>
+          setEditingInvestor(null);
+          setShowAIModal(false);
+          setShowAddModal(true);
+        }}
+      />
     </div>
   );
 }
