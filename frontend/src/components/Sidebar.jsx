@@ -18,7 +18,7 @@ export const Sidebar = ({ activeTab, onTabChange, newCount }) => {
           </div>
           <div>
             <h1 className="font-bold text-lg text-slate-900 tracking-tight" style={{ fontFamily: 'Manrope, sans-serif' }}>
-              DealFlow
+              Valencia
             </h1>
             <p className="text-xs text-slate-500">Investor Database</p>
           </div>
