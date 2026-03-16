@@ -18,7 +18,7 @@ import {
 import * as XLSX from 'xlsx';
 
 const INVESTORS_COLLECTION = 'investors';
-const BACKEND_URL = 'http://192.168.0.109:8000';
+const BACKEND_URL = 'http://72.61.248.3:8000';
 
 // Helper to convert Firestore timestamp to ISO string
 const convertTimestamp = (timestamp) => {
